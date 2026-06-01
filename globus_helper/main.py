@@ -239,16 +239,35 @@ class GlobusSync:
         capture_output: bool = False,
         text: bool = True,
         check: bool = True,
+        wait: bool = True,
     ) -> subprocess.CompletedProcess:
         """Execute the transfer command via :func:`subprocess.run`."""
         command = self.build_transfer_command()
         logger.debug("Executing globus command: %s", command)
-        return subprocess.run(
+        result = subprocess.run(
             command,
-            capture_output=capture_output,
+            capture_output=True,
             text=text,
             check=check,
         )
+        
+        if wait and not self.dry_run:
+            # Extract Task ID from stdout (Format: "Task ID: <uuid>")
+            import re
+            match = re.search(r"Task ID:\s+([a-f0-9\-]+)", result.stdout)
+            if match:
+                task_id = match.group(1)
+                logger.info("Waiting for Globus task %s to complete...", task_id)
+                subprocess.run([self.globus_command, "task", "wait", task_id], check=True)
+            else:
+                logger.warning("Could not extract Task ID from output; skipping wait.")
+
+        if not capture_output:
+            print(result.stdout)
+            if result.stderr:
+                sys.stderr.write(result.stderr)
+
+        return result
 
 
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}

@@ -13,6 +13,17 @@ This project keeps the Globus CLI invocation logic in `globus_helper/main.py` so
 ### Install and Configure the Globus CLI
 
 1. Install the Globus CLI (choose one):
+...
+2. Log in to your Globus account:
+   ```bash
+   globus login
+   ```
+
+### Background Authentication (Automation)
+For background sync (Service Account):
+1. Register app at [developers.globus.org](https://developers.globus.org).
+2. Set `GLOBUS_CLIENT_ID` and `GLOBUS_CLIENT_SECRET` in `.env`.
+3. Give Service Account Identity (`UUID@clients.auth.globus.org`) access to endpoints.
    ```bash
    pipx install globus-cli
    # or

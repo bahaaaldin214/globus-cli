@@ -3,3 +3,7 @@
 .envrc.local
 __pycache__/
 *.egg-info/
+GEMINI.md
+.graphify/
+graph_output/
+.env
