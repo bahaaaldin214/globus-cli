@@ -47,20 +47,42 @@ DEFAULT_RAW_FOLDER = "ne-dump/Actigraph"
 PROGRESS_WIDTH = 30
 
 
-def _render_progress(current: int, total: int, *, label: str = "Copying") -> None:
+def _render_progress(
+    current: int,
+    total: int,
+    *,
+    copied: int = 0,
+    skipped: int = 0,
+    label: str = "Transfer",
+) -> None:
     if total <= 0:
         return
 
     filled = int(PROGRESS_WIDTH * current / total)
     bar = "#" * filled + "-" * (PROGRESS_WIDTH - filled)
     percent = int(100 * current / total)
-    sys.stdout.write(f"\r{label} [{bar}] {current}/{total} ({percent}%)")
+    sys.stdout.write(
+        f"\r{label} [{bar}] {current}/{total} ({percent}%) "
+        f"copied={copied} skipped={skipped}"
+    )
     sys.stdout.flush()
 
 
 def _finish_progress() -> None:
     sys.stdout.write("\n")
     sys.stdout.flush()
+
+
+def _needs_copy(source: Path, destination: Path) -> bool:
+    if not destination.exists():
+        return True
+
+    source_stat = source.stat()
+    destination_stat = destination.stat()
+    if source_stat.st_size != destination_stat.st_size:
+        return True
+
+    return source_stat.st_mtime > destination_stat.st_mtime
 
 
 def copy_actigraphy_to_bids(
@@ -216,17 +238,31 @@ def copy_actigraphy_to_bids(
     else:
         copied = []
         for index, (source, destination) in enumerate(planned, start=1):
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-            copied.append((source, destination))
-            _render_progress(index, len(planned))
+            if _needs_copy(source, destination):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                temporary_destination = destination.with_suffix(
+                    f"{destination.suffix}.tmp"
+                )
+                shutil.copyfile(source, temporary_destination)
+                temporary_destination.replace(destination)
+                copied.append((source, destination))
+            else:
+                skipped_existing += 1
+
+            _render_progress(
+                index,
+                len(planned),
+                copied=len(copied),
+                skipped=skipped_existing,
+            )
         if planned:
             _finish_progress()
 
     logger.info(
-        "Identified %d file(s) for transfer (dry_run=%s, skipped_existing=%d)",
-        len(copied),
+        "Identified %d planned file(s) for transfer (dry_run=%s, copied=%d, skipped_existing=%d)",
+        len(planned),
         dry_run,
+        len(copied),
         skipped_existing,
     )
     return copied
