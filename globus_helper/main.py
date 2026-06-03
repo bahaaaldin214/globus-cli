@@ -424,8 +424,11 @@ def transfer_command(
         raise click.ClickException(str(exc)) from exc
 
     action = "Would copy" if dry_run else "Copied"
-    for source, destination in copied:
-        click.echo(f"{action} {source} -> {destination}")
+    if dry_run:
+        for source, destination in copied:
+            click.echo(f"{action} {source} -> {destination}")
+    else:
+        click.echo(f"{action} {len(copied)} file(s).")
 
     logger.info("Actigraphy transfer complete (dry_run=%s)", dry_run)
 

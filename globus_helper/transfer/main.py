@@ -44,6 +44,23 @@ VERSION_TO_SESSION = {"V0": "1", "V3": "2", "V5": "3"}
 DUMP_TO_SESSION = {"A1": "1", "A2": "2", "A3": "3", "A4": "4"}
 ENV_RAW_FOLDER = "RAW_FOLDER"
 DEFAULT_RAW_FOLDER = "ne-dump/Actigraph"
+PROGRESS_WIDTH = 30
+
+
+def _render_progress(current: int, total: int, *, label: str = "Copying") -> None:
+    if total <= 0:
+        return
+
+    filled = int(PROGRESS_WIDTH * current / total)
+    bar = "#" * filled + "-" * (PROGRESS_WIDTH - filled)
+    percent = int(100 * current / total)
+    sys.stdout.write(f"\r{label} [{bar}] {current}/{total} ({percent}%)")
+    sys.stdout.flush()
+
+
+def _finish_progress() -> None:
+    sys.stdout.write("\n")
+    sys.stdout.flush()
 
 
 def copy_actigraphy_to_bids(
@@ -102,7 +119,7 @@ def copy_actigraphy_to_bids(
         logger.error("Actigraphy source directory not found at %s", source_root)
         raise FileNotFoundError(f"Actigraphy source directory not found: {source_root}")
 
-    copied: List[Tuple[Path, Path]] = []
+    planned: List[Tuple[Path, Path]] = []
     skipped_existing = 0
 
     dump_dirs = [
@@ -111,23 +128,14 @@ def copy_actigraphy_to_bids(
         if dump_dir.is_dir() and dump_dir.name in DUMP_TO_SESSION
     ]
 
-    def _copy_csv(
+    def _plan_csv(
         *, subject_id: str, session_id: str, csv_file: Path
     ) -> None:
         destination_dir = destination_root / f"sub-{subject_id}" / "accel" / f"ses-{session_id}"
         destination_file = destination_dir / f"sub-{subject_id}_ses-{session_id}_accel.csv"
 
-        if not dry_run:
-            destination_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(csv_file, destination_file)
-
-        logger.debug(
-            "%s %s -> %s",
-            "Would copy" if dry_run else "Copying",
-            csv_file,
-            destination_file,
-        )
-        copied.append((csv_file, destination_file))
+        logger.debug("Planned copy %s -> %s", csv_file, destination_file)
+        planned.append((csv_file, destination_file))
 
     def _iter_session_csvs(session_root: Path) -> List[Path]:
         csv_files = [csv_file for csv_file in sorted(session_root.glob("*RAW.csv")) if csv_file.is_file()]
@@ -161,7 +169,7 @@ def copy_actigraphy_to_bids(
                 )
 
                 for csv_file in _iter_session_csvs(subject_dir):
-                    _copy_csv(subject_id=subject_id, session_id=session_id, csv_file=csv_file)
+                    _plan_csv(subject_id=subject_id, session_id=session_id, csv_file=csv_file)
     else:
         logger.debug("Detected legacy layout (no dump directories present)")
         for subject_dir in sorted(source_root.glob("*_Actigraphy")):
@@ -182,7 +190,7 @@ def copy_actigraphy_to_bids(
                 session_id = DUMP_TO_SESSION.get(session_dir.name)
                 if session_id is not None:
                     for csv_file in _iter_session_csvs(session_dir):
-                        _copy_csv(
+                        _plan_csv(
                             subject_id=subject_id,
                             session_id=session_id,
                             csv_file=csv_file,
@@ -199,9 +207,21 @@ def copy_actigraphy_to_bids(
 
                 for csv_file in sorted(session_dir.glob("*RAW.csv")):
                     if csv_file.is_file():
-                        _copy_csv(
+                        _plan_csv(
                             subject_id=subject_id, session_id=session_id, csv_file=csv_file
                         )
+
+    if dry_run:
+        copied = planned
+    else:
+        copied = []
+        for index, (source, destination) in enumerate(planned, start=1):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            copied.append((source, destination))
+            _render_progress(index, len(planned))
+        if planned:
+            _finish_progress()
 
     logger.info(
         "Identified %d file(s) for transfer (dry_run=%s, skipped_existing=%d)",
@@ -238,9 +258,11 @@ if __name__ == "__main__":
 
     try:
         results = copy_actigraphy_to_bids(**kwargs)
-        for source, destination in results:
-            action = "Would copy" if args.dry_run else "Copied"
-            print(f"{action} {source} -> {destination}")
+        if args.dry_run:
+            for source, destination in results:
+                print(f"Would copy {source} -> {destination}")
+        else:
+            print(f"Copied {len(results)} file(s).")
         logger.info("Transfer operation complete (dry_run=%s)", args.dry_run)
     except Exception as exc:  # pragma: no cover - convenience for CLI usage
         logger.exception("Transfer operation failed")
