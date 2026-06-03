@@ -1,9 +1,11 @@
-# This file is the basis of syncing files between the two Globus endpoints.
-# It is called by the cron job in cron.sh
-# For more information on the flags used here, see: https://docs.globus.org/cli/reference/transfer/
-# Or you can look at ./setup.sh for more comments on the flags.
+#!/usr/bin/env bash
+set -euo pipefail
 
-NEU="686bbc3e-08f7-46cf-95f8-7539e6fee972"
-UI="39dd0982-d784-11e6-9cd4-22000a1e3b52"
-globus transfer --recursive --sync-level mtime --label "NEU to UI sync" $NEU:/ $UI:/Shared/vosslabhpc/Projects/BOOST/InterventionStudy/3-experiment/data/ne-dump --notify on --preserve-mtime
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="${SCRIPT_DIR}/../..:${PYTHONPATH:-}"
+export GLOBUS_SOURCE_ENDPOINT="${GLOBUS_SOURCE_ENDPOINT:-f183d8f3-a966-49cd-b175-817a0a88cc3c}"
+export GLOBUS_DEST_ENDPOINT="${GLOBUS_DEST_ENDPOINT:-39dd0982-d784-11e6-9cd4-22000a1e3b52}"
+export GLOBUS_DEST_PATH="${GLOBUS_DEST_PATH:-/Shared/vosslabhpc/Projects/BOOST/InterventionStudy/3-experiment/data/bmohammad-dump/Actigraph}"
+
+python -m globus_helper.main sync --source-path "/Actigraphy Data/" "$@"
 

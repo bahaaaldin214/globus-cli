@@ -30,7 +30,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 try:
     from ..logging_config import setup_logging
@@ -42,10 +42,15 @@ logger = logging.getLogger(__name__)
 
 VERSION_TO_SESSION = {"V0": "1", "V3": "2", "V5": "3"}
 DUMP_TO_SESSION = {"A1": "1", "A2": "2", "A3": "3", "A4": "4"}
+ENV_RAW_FOLDER = "RAW_FOLDER"
+DEFAULT_RAW_FOLDER = "ne-dump/Actigraph"
 
 
 def copy_actigraphy_to_bids(
-    base_path: Optional[Path] = None, *, dry_run: bool = False
+    base_path: Optional[Path] = None,
+    *,
+    dry_run: bool = False,
+    raw_folder: Optional[str] = None,
 ) -> List[Tuple[Path, Path]]:
     """Copy the actigraphy CSVs into a BIDS-compliant directory structure.
 
@@ -58,6 +63,9 @@ def copy_actigraphy_to_bids(
         When True, simulate the copy without creating directories or writing
         files. The returned list still contains the source and intended
         destination paths.
+    raw_folder:
+        Sub-path relative to base_path containing raw actigraphy files.
+        Defaults to `RAW_FOLDER` when set, otherwise "ne-dump/Actigraph".
 
     Returns
     -------
@@ -82,9 +90,10 @@ def copy_actigraphy_to_bids(
         base_path = Path(raw_base)
 
     base_path = Path(base_path).expanduser().resolve()
+    raw_folder = raw_folder or os.environ.get(ENV_RAW_FOLDER, DEFAULT_RAW_FOLDER)
     logger.debug("Resolved base path: %s (dry_run=%s)", base_path, dry_run)
 
-    source_root = base_path / "ne-dump" / "Actigraph"
+    source_root = base_path / raw_folder
     destination_root = base_path / "act-int-test"
 
     logger.debug("Scanning source root: %s", source_root)
@@ -120,6 +129,18 @@ def copy_actigraphy_to_bids(
         )
         copied.append((csv_file, destination_file))
 
+    def _iter_session_csvs(session_root: Path) -> List[Path]:
+        csv_files = [csv_file for csv_file in sorted(session_root.glob("*RAW.csv")) if csv_file.is_file()]
+        for version_dir in sorted(session_root.iterdir()):
+            if not version_dir.is_dir() or version_dir.name.upper() not in VERSION_TO_SESSION:
+                continue
+            csv_files.extend(
+                csv_file
+                for csv_file in sorted(version_dir.glob("*RAW.csv"))
+                if csv_file.is_file()
+            )
+        return csv_files
+
     if dump_dirs:
         logger.debug("Detected dump-aware layout with %d dump directory(ies)", len(dump_dirs))
         for dump_dir in dump_dirs:
@@ -139,13 +160,8 @@ def copy_actigraphy_to_bids(
                     "Processing subject %s in %s (session=%s)", subject_id, subject_dir, session_id
                 )
 
-                for version_dir in sorted(subject_dir.iterdir()):
-                    if not version_dir.is_dir():
-                        continue
-
-                    for csv_file in version_dir.glob("*RAW.csv"):
-                        if csv_file.is_file():
-                            _copy_csv(subject_id=subject_id, session_id=session_id, csv_file=csv_file)
+                for csv_file in _iter_session_csvs(subject_dir):
+                    _copy_csv(subject_id=subject_id, session_id=session_id, csv_file=csv_file)
     else:
         logger.debug("Detected legacy layout (no dump directories present)")
         for subject_dir in sorted(source_root.glob("*_Actigraphy")):
@@ -159,19 +175,29 @@ def copy_actigraphy_to_bids(
 
             logger.debug("Processing subject %s in %s", subject_id, subject_dir)
 
-            for version_dir in sorted(subject_dir.iterdir()):
-                if not version_dir.is_dir():
+            for session_dir in sorted(subject_dir.iterdir()):
+                if not session_dir.is_dir():
                     continue
 
-                session_id = VERSION_TO_SESSION.get(version_dir.name)
+                session_id = DUMP_TO_SESSION.get(session_dir.name)
+                if session_id is not None:
+                    for csv_file in _iter_session_csvs(session_dir):
+                        _copy_csv(
+                            subject_id=subject_id,
+                            session_id=session_id,
+                            csv_file=csv_file,
+                        )
+                    continue
+
+                session_id = VERSION_TO_SESSION.get(session_dir.name)
                 if session_id is None:
                     logger.debug(
                         "Skipping version directory %s; no session mapping available",
-                        version_dir,
+                        session_dir,
                     )
                     continue
 
-                for csv_file in version_dir.glob("*RAW.csv"):
+                for csv_file in sorted(session_dir.glob("*RAW.csv")):
                     if csv_file.is_file():
                         _copy_csv(
                             subject_id=subject_id, session_id=session_id, csv_file=csv_file
@@ -186,14 +212,6 @@ def copy_actigraphy_to_bids(
     return copied
 
 
-def iter_transferred_files(
-    *, base_path: Optional[Path] = None, dry_run: bool = False
-) -> Iterable[Tuple[Path, Path]]:
-    """Convenience generator yielding the results of `copy_actigraphy_to_bids`."""
-    for result in copy_actigraphy_to_bids(base_path=base_path, dry_run=dry_run):
-        yield result
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Copy actigraphy CSVs into the BIDS-like directory structure."
@@ -203,21 +221,27 @@ if __name__ == "__main__":
         help="Root directory that contains ne-dump/Actigraphy (defaults to BASE_PATH).",
     )
     parser.add_argument(
+        "--raw-folder",
+        default=None,
+        help="Sub-path relative to base-path containing raw files.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the files that would be copied without modifying the filesystem.",
     )
     args = parser.parse_args()
 
-    kwargs = {"dry_run": args.dry_run}
+    kwargs = {"dry_run": args.dry_run, "raw_folder": args.raw_folder}
     if args.base_path:
         kwargs["base_path"] = Path(args.base_path)
 
     try:
-        for source, destination in iter_transferred_files(**kwargs):
+        results = copy_actigraphy_to_bids(**kwargs)
+        for source, destination in results:
             action = "Would copy" if args.dry_run else "Copied"
             print(f"{action} {source} -> {destination}")
-        logger.info("Transfer simulation complete (dry_run=%s)", args.dry_run)
+        logger.info("Transfer operation complete (dry_run=%s)", args.dry_run)
     except Exception as exc:  # pragma: no cover - convenience for CLI usage
         logger.exception("Transfer operation failed")
         sys.stderr.write(f"Error: {exc}\n")

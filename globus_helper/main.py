@@ -395,6 +395,10 @@ def sync_command(
     help="Root containing both ne-dump/ and act-int-test/. Defaults to BASE_PATH env var.",
 )
 @click.option(
+    "--raw-folder",
+    help="Sub-path under base-path containing raw files. Defaults to RAW_FOLDER env var.",
+)
+@click.option(
     "--dry-run/--apply",
     default=True,
     show_default=True,
@@ -403,12 +407,15 @@ def sync_command(
 def transfer_command(
     *,
     base_path: Optional[Path],
+    raw_folder: Optional[str],
     dry_run: bool,
 ) -> None:
     """Copy actigraphy CSVs into the BIDS-like layout."""
     kwargs = {"dry_run": dry_run}
     if base_path is not None:
         kwargs["base_path"] = base_path
+    if raw_folder is not None:
+        kwargs["raw_folder"] = raw_folder
 
     try:
         copied = copy_actigraphy_to_bids(**kwargs)

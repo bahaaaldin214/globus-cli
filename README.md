@@ -89,7 +89,7 @@ Override individual arguments via flags as needed:
 
 ```bash
 globus-helper sync \
-  --dest-path "/Shared/vosslabhpc/Projects/BOOST/InterventionStudy/3-experiment/data/ne-dump" \
+  --dest-path "/Shared/vosslabhpc/Projects/BOOST/InterventionStudy/3-experiment/data/bmohammad-dump/Actigraph" \
   --dry-run
 ```
 
@@ -102,7 +102,7 @@ set -euo pipefail
 
 export GLOBUS_SOURCE_ENDPOINT="686bbc3e-08f7-46cf-95f8-7539e6fee972"
 export GLOBUS_DEST_ENDPOINT="39dd0982-d784-11e6-9cd4-22000a1e3b52"
-export GLOBUS_DEST_PATH="/Shared/vosslabhpc/Projects/BOOST/InterventionStudy/3-experiment/data/ne-dump"
+export GLOBUS_DEST_PATH="/Shared/vosslabhpc/Projects/BOOST/InterventionStudy/3-experiment/data/bmohammad-dump/Actigraph"
 
 globus-helper sync
 ```
@@ -118,7 +118,8 @@ python -m globus_helper.main sync --show-command
 `globus_helper/transfer/main.py` converts the raw actigraphy dump into the BIDS-like layout expected by downstream tooling.
 
 ### Configuration
-- Set `BASE_PATH` to the common root that contains both `ne-dump/Actigraphy` and the target `act-int-test` directory. The script will create the required BIDS folders as needed.
+- Set `BASE_PATH` to the common root that contains both the raw dump folder and the target `act-int-test` directory. The script will create the required BIDS folders as needed.
+- Set `RAW_FOLDER` to the raw actigraphy folder under `BASE_PATH` when not using the default `ne-dump/Actigraph`. The Windows wrappers currently use `bmohammad-dump/Actigraph` to avoid `ne-dump` permission errors.
 
 ### Usage
 Run the helper directly to copy files and echo each source/destination pair:
@@ -127,10 +128,10 @@ Run the helper directly to copy files and echo each source/destination pair:
 globus-helper transfer --apply --base-path /path/to/share
 ```
 
-Add `--dry-run` to verify the mapping without writing files, or `--base-path` to override `BASE_PATH`:
+Add `--dry-run` to verify the mapping without writing files, or `--base-path` / `--raw-folder` to override environment defaults:
 
 ```bash
-BASE_PATH=/path/to/share python -m globus_helper.transfer.main --dry-run
+BASE_PATH=/path/to/share RAW_FOLDER=bmohammad-dump/Actigraph python -m globus_helper.transfer.main --dry-run
 ```
 
 The transfer helper is idempotent: existing destination files are skipped, and new copies are written with fresh default permissions (no metadata is propagated from the source CSVs).
