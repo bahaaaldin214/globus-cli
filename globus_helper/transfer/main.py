@@ -15,7 +15,7 @@ assignment.
 
 The desired output is in a BIDS-inspired structure::
 
-    BASE_PATH/act-int-test/sub-<subject_id>/accel/ses-<session_id>/sub-<subject_id>_ses-<session_id>_accel.csv
+    BASE_PATH/inputs/act-int-ready/sub-<subject_id>/accel/ses-<session_id>/sub-<subject_id>_ses-<session_id>_accel.csv
 
 This module provides a helper that copies each actigraphy CSV into the target
 layout using glob pattern matching. `BASE_PATH` is expected to be supplied via
@@ -29,6 +29,7 @@ import logging
 import os
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -43,7 +44,9 @@ logger = logging.getLogger(__name__)
 VERSION_TO_SESSION = {"V0": "1", "V3": "2", "V5": "3"}
 DUMP_TO_SESSION = {"A1": "1", "A2": "2", "A3": "3", "A4": "4"}
 ENV_RAW_FOLDER = "RAW_FOLDER"
-DEFAULT_RAW_FOLDER = "ne-dump/Actigraph"
+ENV_DEST_FOLDER = "DEST_FOLDER"
+DEFAULT_RAW_FOLDER = "data/bmohammad-dump/Actigraph"
+DEFAULT_DEST_FOLDER = "inputs/act-int-ready"
 PROGRESS_WIDTH = 30
 
 
@@ -85,11 +88,58 @@ def _needs_copy(source: Path, destination: Path) -> bool:
     return source_stat.st_mtime > destination_stat.st_mtime
 
 
+def _count_source_files(source_root: Path) -> tuple[int, int]:
+    raw_count = sum(1 for _ in source_root.rglob("*RAW.csv"))
+    sixty_sec_count = sum(1 for _ in source_root.rglob("*60sec.csv"))
+    return raw_count, sixty_sec_count
+
+
+def _default_report_path(base_path: Path) -> Path:
+    stamp = datetime.now().strftime("%m-%d-%Y")
+    return base_path / "inputs" / f"transfered-{stamp}.txt"
+
+
+def _write_report(
+    report_path: Path,
+    *,
+    source_root: Path,
+    destination_root: Path,
+    dry_run: bool,
+    expected_copies: int,
+    raw_count: int,
+    sixty_sec_count: int,
+    processed: int,
+    copied: int,
+    skipped: int,
+    last_action: str = "not started",
+) -> None:
+    percent = int(100 * processed / expected_copies) if expected_copies else 100
+    lines = [
+        f"Report file: {report_path.name}",
+        f"Generated: {datetime.now().isoformat(timespec='seconds')}",
+        f"Dry run: {dry_run}",
+        f"Source root: {source_root}",
+        f"Destination root: {destination_root}",
+        f"Expected copies: {expected_copies}",
+        f"Processed: {processed}/{expected_copies} ({percent}%)",
+        f"Files copied: {copied}",
+        f"Files skipped: {skipped}",
+        f"RAW csv files found: {raw_count}",
+        f"60sec csv files found: {sixty_sec_count}",
+        f"Last action: {last_action}",
+    ]
+
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def copy_actigraphy_to_bids(
     base_path: Optional[Path] = None,
     *,
     dry_run: bool = False,
     raw_folder: Optional[str] = None,
+    dest_folder: Optional[str] = None,
+    report_path: Optional[Path] = None,
 ) -> List[Tuple[Path, Path]]:
     """Copy the actigraphy CSVs into a BIDS-compliant directory structure.
 
@@ -104,7 +154,12 @@ def copy_actigraphy_to_bids(
         destination paths.
     raw_folder:
         Sub-path relative to base_path containing raw actigraphy files.
-        Defaults to `RAW_FOLDER` when set, otherwise "ne-dump/Actigraph".
+        Defaults to `RAW_FOLDER` when set, otherwise "data/bmohammad-dump/Actigraph".
+    dest_folder:
+        Sub-path relative to base_path where canonical files are written.
+        Defaults to `DEST_FOLDER` when set, otherwise "inputs/act-int-ready".
+    report_path:
+        Optional path for a live-updated transfer report.
 
     Returns
     -------
@@ -130,10 +185,12 @@ def copy_actigraphy_to_bids(
 
     base_path = Path(base_path).expanduser().resolve()
     raw_folder = raw_folder or os.environ.get(ENV_RAW_FOLDER, DEFAULT_RAW_FOLDER)
+    dest_folder = dest_folder or os.environ.get(ENV_DEST_FOLDER, DEFAULT_DEST_FOLDER)
     logger.debug("Resolved base path: %s (dry_run=%s)", base_path, dry_run)
 
     source_root = base_path / raw_folder
-    destination_root = base_path / "act-int-test"
+    destination_root = base_path / dest_folder
+    report_path = Path(report_path).expanduser() if report_path else _default_report_path(base_path)
 
     logger.debug("Scanning source root: %s", source_root)
 
@@ -143,6 +200,7 @@ def copy_actigraphy_to_bids(
 
     planned: List[Tuple[Path, Path]] = []
     skipped_existing = 0
+    raw_count, sixty_sec_count = _count_source_files(source_root)
 
     dump_dirs = [
         dump_dir
@@ -235,6 +293,19 @@ def copy_actigraphy_to_bids(
 
     if dry_run:
         copied = planned
+        _write_report(
+            report_path,
+            source_root=source_root,
+            destination_root=destination_root,
+            dry_run=dry_run,
+            expected_copies=len(planned),
+            raw_count=raw_count,
+            sixty_sec_count=sixty_sec_count,
+            processed=len(planned),
+            copied=0,
+            skipped=0,
+            last_action="dry run complete",
+        )
     else:
         copied = []
         for index, (source, destination) in enumerate(planned, start=1):
@@ -246,14 +317,29 @@ def copy_actigraphy_to_bids(
                 shutil.copyfile(source, temporary_destination)
                 temporary_destination.replace(destination)
                 copied.append((source, destination))
+                last_action = "copied"
             else:
                 skipped_existing += 1
+                last_action = "skipped existing"
 
             _render_progress(
                 index,
                 len(planned),
                 copied=len(copied),
                 skipped=skipped_existing,
+            )
+            _write_report(
+                report_path,
+                source_root=source_root,
+                destination_root=destination_root,
+                dry_run=dry_run,
+                expected_copies=len(planned),
+                raw_count=raw_count,
+                sixty_sec_count=sixty_sec_count,
+                processed=index,
+                copied=len(copied),
+                skipped=skipped_existing,
+                last_action=last_action,
             )
         if planned:
             _finish_progress()
@@ -262,7 +348,7 @@ def copy_actigraphy_to_bids(
         "Identified %d planned file(s) for transfer (dry_run=%s, copied=%d, skipped_existing=%d)",
         len(planned),
         dry_run,
-        len(copied),
+        0 if dry_run else len(copied),
         skipped_existing,
     )
     return copied
@@ -274,12 +360,22 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--base-path",
-        help="Root directory that contains ne-dump/Actigraphy (defaults to BASE_PATH).",
+        help="Root directory that contains the raw and destination folders (defaults to BASE_PATH).",
     )
     parser.add_argument(
         "--raw-folder",
         default=None,
         help="Sub-path relative to base-path containing raw files.",
+    )
+    parser.add_argument(
+        "--dest-folder",
+        default=None,
+        help="Sub-path relative to base-path where canonical files are written.",
+    )
+    parser.add_argument(
+        "--report-path",
+        default=None,
+        help="Path for the live-updated transfer report.",
     )
     parser.add_argument(
         "--dry-run",
@@ -288,9 +384,15 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    kwargs = {"dry_run": args.dry_run, "raw_folder": args.raw_folder}
+    kwargs = {
+        "dry_run": args.dry_run,
+        "raw_folder": args.raw_folder,
+        "dest_folder": args.dest_folder,
+    }
     if args.base_path:
         kwargs["base_path"] = Path(args.base_path)
+    if args.report_path:
+        kwargs["report_path"] = Path(args.report_path)
 
     try:
         results = copy_actigraphy_to_bids(**kwargs)

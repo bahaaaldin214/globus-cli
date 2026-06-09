@@ -7,3 +7,4 @@ GEMINI.md
 .graphify/
 graph_output/
 .env
+logs/

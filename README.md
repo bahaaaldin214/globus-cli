@@ -118,8 +118,10 @@ python -m globus_helper.main sync --show-command
 `globus_helper/transfer/main.py` converts the raw actigraphy dump into the BIDS-like layout expected by downstream tooling.
 
 ### Configuration
-- Set `BASE_PATH` to the common root that contains both the raw dump folder and the target `act-int-test` directory. The script will create the required BIDS folders as needed.
-- Set `RAW_FOLDER` to the raw actigraphy folder under `BASE_PATH` when not using the default `ne-dump/Actigraph`. The Windows wrappers currently use `bmohammad-dump/Actigraph` to avoid `ne-dump` permission errors.
+- Set `BASE_PATH` to the `3-experiment` root that contains both `data/` and `inputs/`. The script will create the required BIDS folders as needed.
+- Set `RAW_FOLDER` to the raw actigraphy folder under `BASE_PATH`; the default is `data/bmohammad-dump/Actigraph`.
+- Set `DEST_FOLDER` to the canonical transfer destination under `BASE_PATH`; the default is `inputs/act-int-ready`.
+- A live transfer report is written to `BASE_PATH/inputs/transfered-month-day-year.txt` unless `--report-path` is provided.
 
 ### Usage
 Run the helper directly to copy files and echo each source/destination pair:
@@ -128,12 +130,12 @@ Run the helper directly to copy files and echo each source/destination pair:
 globus-helper transfer --apply --base-path /path/to/share
 ```
 
-Add `--dry-run` to verify the mapping without writing files, or `--base-path` / `--raw-folder` to override environment defaults:
+Add `--dry-run` to verify the mapping without writing files, or `--base-path` / `--raw-folder` / `--dest-folder` to override environment defaults:
 
 ```bash
-BASE_PATH=/path/to/share RAW_FOLDER=bmohammad-dump/Actigraph python -m globus_helper.transfer.main --dry-run
+BASE_PATH=/path/to/3-experiment RAW_FOLDER=data/bmohammad-dump/Actigraph DEST_FOLDER=inputs/act-int-ready python -m globus_helper.transfer.main --dry-run
 ```
 
-The transfer helper is idempotent: existing destination files are skipped, and new copies are written with fresh default permissions (no metadata is propagated from the source CSVs).
+The transfer helper currently selects `*RAW.csv` files. The transfer helper is idempotent: existing destination files are skipped, and new copies are written with fresh default permissions (no metadata is propagated from the source CSVs).
 
 You can also import and call `copy_actigraphy_to_bids()` from another script to get the list of copied `(source, destination)` paths for logging or testing.
