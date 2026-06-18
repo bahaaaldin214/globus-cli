@@ -88,10 +88,11 @@ def _needs_copy(source: Path, destination: Path) -> bool:
     return source_stat.st_mtime > destination_stat.st_mtime
 
 
-def _count_source_files(source_root: Path) -> tuple[int, int]:
+def _count_source_files(source_root: Path) -> tuple[int, int, int]:
     raw_count = sum(1 for _ in source_root.rglob("*RAW.csv"))
     sixty_sec_count = sum(1 for _ in source_root.rglob("*60sec.csv"))
-    return raw_count, sixty_sec_count
+    gt3x_count = sum(1 for _ in source_root.rglob("*.gt3x"))
+    return raw_count, sixty_sec_count, gt3x_count
 
 
 def _default_report_path(base_path: Path) -> Path:
@@ -108,6 +109,7 @@ def _write_report(
     expected_copies: int,
     raw_count: int,
     sixty_sec_count: int,
+    gt3x_count: int,
     processed: int,
     copied: int,
     skipped: int,
@@ -124,6 +126,7 @@ def _write_report(
         f"Processed: {processed}/{expected_copies} ({percent}%)",
         f"Files copied: {copied}",
         f"Files skipped: {skipped}",
+        f"GT3X binary files found: {gt3x_count}",
         f"RAW csv files found: {raw_count}",
         f"60sec csv files found: {sixty_sec_count}",
         f"Last action: {last_action}",
@@ -141,37 +144,9 @@ def copy_actigraphy_to_bids(
     dest_folder: Optional[str] = None,
     report_path: Optional[Path] = None,
 ) -> List[Tuple[Path, Path]]:
-    """Copy the actigraphy CSVs into a BIDS-compliant directory structure.
+    """Copy the actigraphy files into a BIDS-compliant directory structure.
 
-    Parameters
-    ----------
-    base_path:
-        Optional base directory. If omitted, the value of the `BASE_PATH`
-        environment variable is used.
-    dry_run:
-        When True, simulate the copy without creating directories or writing
-        files. The returned list still contains the source and intended
-        destination paths.
-    raw_folder:
-        Sub-path relative to base_path containing raw actigraphy files.
-        Defaults to `RAW_FOLDER` when set, otherwise "data/bmohammad-dump/Actigraph".
-    dest_folder:
-        Sub-path relative to base_path where canonical files are written.
-        Defaults to `DEST_FOLDER` when set, otherwise "inputs/act-int-ready".
-    report_path:
-        Optional path for a live-updated transfer report.
-
-    Returns
-    -------
-    list[tuple[pathlib.Path, pathlib.Path]]
-        A list of `(source, destination)` pairs for the files that were copied.
-
-    Raises
-    ------
-    EnvironmentError
-        If `BASE_PATH` is not provided via argument or environment.
-    FileNotFoundError
-        If the expected source directory does not exist.
+    Prioritizes .gt3x files over RAW.csv to save storage space.
     """
 
     if base_path is None:
@@ -200,7 +175,7 @@ def copy_actigraphy_to_bids(
 
     planned: List[Tuple[Path, Path]] = []
     skipped_existing = 0
-    raw_count, sixty_sec_count = _count_source_files(source_root)
+    raw_count, sixty_sec_count, gt3x_count = _count_source_files(source_root)
 
     dump_dirs = [
         dump_dir
@@ -208,26 +183,38 @@ def copy_actigraphy_to_bids(
         if dump_dir.is_dir() and dump_dir.name in DUMP_TO_SESSION
     ]
 
-    def _plan_csv(
-        *, subject_id: str, session_id: str, csv_file: Path
+    def _plan_file(
+        *, subject_id: str, session_id: str, source_file: Path
     ) -> None:
         destination_dir = destination_root / f"sub-{subject_id}" / "accel" / f"ses-{session_id}"
-        destination_file = destination_dir / f"sub-{subject_id}_ses-{session_id}_accel.csv"
+        ext = source_file.suffix.lower()
+        destination_file = destination_dir / f"sub-{subject_id}_ses-{session_id}_accel{ext}"
 
-        logger.debug("Planned copy %s -> %s", csv_file, destination_file)
-        planned.append((csv_file, destination_file))
+        logger.debug("Planned copy %s -> %s", source_file, destination_file)
+        planned.append((source_file, destination_file))
 
-    def _iter_session_csvs(session_root: Path) -> List[Path]:
-        csv_files = [csv_file for csv_file in sorted(session_root.glob("*RAW.csv")) if csv_file.is_file()]
+    def _iter_session_files(session_root: Path) -> List[Path]:
+        """Find candidates, prioritizing .gt3x over RAW.csv."""
+        # Check for .gt3x in this dir
+        gt3x_files = list(session_root.glob("*.gt3x"))
+        if gt3x_files:
+            return sorted(gt3x_files)
+
+        # Fallback to RAW.csv
+        raw_files = [f for f in sorted(session_root.glob("*RAW.csv")) if f.is_file()]
+        
         for version_dir in sorted(session_root.iterdir()):
             if not version_dir.is_dir() or version_dir.name.upper() not in VERSION_TO_SESSION:
                 continue
-            csv_files.extend(
-                csv_file
-                for csv_file in sorted(version_dir.glob("*RAW.csv"))
-                if csv_file.is_file()
+            
+            v_gt3x = list(version_dir.glob("*.gt3x"))
+            if v_gt3x:
+                return sorted(v_gt3x)
+                
+            raw_files.extend(
+                f for f in sorted(version_dir.glob("*RAW.csv")) if f.is_file()
             )
-        return csv_files
+        return raw_files
 
     if dump_dirs:
         logger.debug("Detected dump-aware layout with %d dump directory(ies)", len(dump_dirs))
@@ -239,29 +226,19 @@ def copy_actigraphy_to_bids(
 
                 subject_id = subject_dir.name.split("_Actigraphy", 1)[0].strip()
                 if not subject_id:
-                    logger.debug(
-                        "Skipping subject directory %s due to missing subject_id", subject_dir
-                    )
                     continue
 
-                logger.debug(
-                    "Processing subject %s in %s (session=%s)", subject_id, subject_dir, session_id
-                )
-
-                for csv_file in _iter_session_csvs(subject_dir):
-                    _plan_csv(subject_id=subject_id, session_id=session_id, csv_file=csv_file)
+                for f in _iter_session_files(subject_dir):
+                    _plan_file(subject_id=subject_id, session_id=session_id, source_file=f)
     else:
-        logger.debug("Detected legacy layout (no dump directories present)")
+        logger.debug("Detected legacy layout")
         for subject_dir in sorted(source_root.glob("*_Actigraphy")):
             if not subject_dir.is_dir():
                 continue
 
             subject_id = subject_dir.name.split("_Actigraphy", 1)[0].strip()
             if not subject_id:
-                logger.debug("Skipping subject directory %s due to missing subject_id", subject_dir)
                 continue
-
-            logger.debug("Processing subject %s in %s", subject_id, subject_dir)
 
             for session_dir in sorted(subject_dir.iterdir()):
                 if not session_dir.is_dir():
@@ -269,27 +246,21 @@ def copy_actigraphy_to_bids(
 
                 session_id = DUMP_TO_SESSION.get(session_dir.name)
                 if session_id is not None:
-                    for csv_file in _iter_session_csvs(session_dir):
-                        _plan_csv(
-                            subject_id=subject_id,
-                            session_id=session_id,
-                            csv_file=csv_file,
-                        )
+                    for f in _iter_session_files(session_dir):
+                        _plan_file(subject_id=subject_id, session_id=session_id, source_file=f)
                     continue
 
                 session_id = VERSION_TO_SESSION.get(session_dir.name)
                 if session_id is None:
-                    logger.debug(
-                        "Skipping version directory %s; no session mapping available",
-                        session_dir,
-                    )
                     continue
 
-                for csv_file in sorted(session_dir.glob("*RAW.csv")):
-                    if csv_file.is_file():
-                        _plan_csv(
-                            subject_id=subject_id, session_id=session_id, csv_file=csv_file
-                        )
+                for f in sorted(session_dir.glob("*.gt3x")):
+                    _plan_file(subject_id=subject_id, session_id=session_id, source_file=f)
+                
+                # Only if no gt3x found in this session_dir
+                if not list(session_dir.glob("*.gt3x")):
+                    for f in sorted(session_dir.glob("*RAW.csv")):
+                        _plan_file(subject_id=subject_id, session_id=session_id, source_file=f)
 
     if dry_run:
         copied = planned
@@ -301,6 +272,7 @@ def copy_actigraphy_to_bids(
             expected_copies=len(planned),
             raw_count=raw_count,
             sixty_sec_count=sixty_sec_count,
+            gt3x_count=gt3x_count,
             processed=len(planned),
             copied=0,
             skipped=0,
@@ -336,6 +308,7 @@ def copy_actigraphy_to_bids(
                 expected_copies=len(planned),
                 raw_count=raw_count,
                 sixty_sec_count=sixty_sec_count,
+                gt3x_count=gt3x_count,
                 processed=index,
                 copied=len(copied),
                 skipped=skipped_existing,
@@ -343,6 +316,7 @@ def copy_actigraphy_to_bids(
             )
         if planned:
             _finish_progress()
+
 
     logger.info(
         "Identified %d planned file(s) for transfer (dry_run=%s, copied=%d, skipped_existing=%d)",
