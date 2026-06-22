@@ -280,7 +280,9 @@ def copy_actigraphy_to_bids(
         )
     else:
         copied = []
-        for index, (source, destination) in enumerate(planned, start=1):
+
+        def _copy_one(item: Tuple[Path, Path]) -> Tuple[str, Path, Path]:
+            source, destination = item
             if _needs_copy(source, destination):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 temporary_destination = destination.with_suffix(
@@ -288,33 +290,47 @@ def copy_actigraphy_to_bids(
                 )
                 shutil.copyfile(source, temporary_destination)
                 temporary_destination.replace(destination)
-                copied.append((source, destination))
-                last_action = "copied"
-            else:
-                skipped_existing += 1
-                last_action = "skipped existing"
+                return ("copied", source, destination)
+            return ("skipped existing", source, destination)
 
-            _render_progress(
-                index,
-                len(planned),
-                copied=len(copied),
-                skipped=skipped_existing,
-            )
-            _write_report(
-                report_path,
-                source_root=source_root,
-                destination_root=destination_root,
-                dry_run=dry_run,
-                expected_copies=len(planned),
-                raw_count=raw_count,
-                sixty_sec_count=sixty_sec_count,
-                gt3x_count=gt3x_count,
-                processed=index,
-                copied=len(copied),
-                skipped=skipped_existing,
-                last_action=last_action,
-            )
+        # ponytail: copies are I/O-bound over a network mount, so a thread pool
+        # (GIL released during I/O) parallelizes well. TRANSFER_WORKERS tunes it;
+        # set 1 for serial. Report is written periodically, not per file.
+        workers = int(os.environ.get("TRANSFER_WORKERS", "8"))
+        workers = max(1, workers)
         if planned:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for index, (last_action, _src, _dst) in enumerate(
+                    executor.map(_copy_one, planned), start=1
+                ):
+                    if last_action == "copied":
+                        copied.append((_src, _dst))
+                    else:
+                        skipped_existing += 1
+
+                    _render_progress(
+                        index,
+                        len(planned),
+                        copied=len(copied),
+                        skipped=skipped_existing,
+                    )
+                    if index % 25 == 0 or index == len(planned):
+                        _write_report(
+                            report_path,
+                            source_root=source_root,
+                            destination_root=destination_root,
+                            dry_run=dry_run,
+                            expected_copies=len(planned),
+                            raw_count=raw_count,
+                            sixty_sec_count=sixty_sec_count,
+                            gt3x_count=gt3x_count,
+                            processed=index,
+                            copied=len(copied),
+                            skipped=skipped_existing,
+                            last_action=last_action,
+                        )
             _finish_progress()
 
 
