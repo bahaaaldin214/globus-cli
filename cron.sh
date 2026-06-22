@@ -14,8 +14,9 @@ cd "$(dirname "$0")"
 git pull --ff-only origin main
 
 # install any new dependencies and make sure the package is available in env
-python -m install -e .
+pip install -e .
 
-# run the sync function (all codebase functions)
-globus-helper sync
+# run sync (NEU -> LSS dump) then BIDS transfer (dump -> inputs/act-int-ready)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+bash "${SCRIPT_DIR}/globus_helper/sh/full_pipeline.sh"
 
