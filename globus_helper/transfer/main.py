@@ -45,9 +45,21 @@ VERSION_TO_SESSION = {"V0": "1", "V3": "2", "V5": "3"}
 DUMP_TO_SESSION = {"A1": "1", "A2": "2", "A3": "3", "A4": "4"}
 ENV_RAW_FOLDER = "RAW_FOLDER"
 ENV_DEST_FOLDER = "DEST_FOLDER"
+ENV_PREFER_RAW = "PREFER_RAW"
 DEFAULT_RAW_FOLDER = "data/bmohammad-dump/Actigraph"
 DEFAULT_DEST_FOLDER = "inputs/act-int-ready"
 PROGRESS_WIDTH = 30
+
+
+def _prefer_raw() -> bool:
+    """PREFER_RAW=1/true forces RAW.csv to win over .gt3x (default: gt3x wins)."""
+    return os.environ.get(ENV_PREFER_RAW, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _select_preferred(gt3x_files: List[Path], raw_files: List[Path]) -> List[Path]:
+    if _prefer_raw():
+        return raw_files if raw_files else gt3x_files
+    return gt3x_files if gt3x_files else raw_files
 
 
 def _render_progress(
@@ -194,27 +206,24 @@ def copy_actigraphy_to_bids(
         planned.append((source_file, destination_file))
 
     def _iter_session_files(session_root: Path) -> List[Path]:
-        """Find candidates, prioritizing .gt3x over RAW.csv."""
-        # Check for .gt3x in this dir
-        gt3x_files = list(session_root.glob("*.gt3x"))
-        if gt3x_files:
-            return sorted(gt3x_files)
-
-        # Fallback to RAW.csv
+        """Find candidates. Default prioritizes .gt3x; PREFER_RAW=1 prefers RAW.csv."""
+        gt3x_files = sorted(session_root.glob("*.gt3x"))
         raw_files = [f for f in sorted(session_root.glob("*RAW.csv")) if f.is_file()]
-        
+
+        # If the preferred type is present at the top level, use it.
+        top = _select_preferred(gt3x_files, raw_files)
+        if top and ((not _prefer_raw() and gt3x_files) or (_prefer_raw() and raw_files)):
+            return top
+
+        # Otherwise descend into version dirs, accumulating both types.
         for version_dir in sorted(session_root.iterdir()):
             if not version_dir.is_dir() or version_dir.name.upper() not in VERSION_TO_SESSION:
                 continue
-            
-            v_gt3x = list(version_dir.glob("*.gt3x"))
-            if v_gt3x:
-                return sorted(v_gt3x)
-                
+            gt3x_files.extend(sorted(version_dir.glob("*.gt3x")))
             raw_files.extend(
                 f for f in sorted(version_dir.glob("*RAW.csv")) if f.is_file()
             )
-        return raw_files
+        return _select_preferred(gt3x_files, raw_files)
 
     if dump_dirs:
         logger.debug("Detected dump-aware layout with %d dump directory(ies)", len(dump_dirs))
@@ -254,13 +263,10 @@ def copy_actigraphy_to_bids(
                 if session_id is None:
                     continue
 
-                for f in sorted(session_dir.glob("*.gt3x")):
+                gt3x_here = sorted(session_dir.glob("*.gt3x"))
+                raw_here = [f for f in sorted(session_dir.glob("*RAW.csv")) if f.is_file()]
+                for f in _select_preferred(gt3x_here, raw_here):
                     _plan_file(subject_id=subject_id, session_id=session_id, source_file=f)
-                
-                # Only if no gt3x found in this session_dir
-                if not list(session_dir.glob("*.gt3x")):
-                    for f in sorted(session_dir.glob("*RAW.csv")):
-                        _plan_file(subject_id=subject_id, session_id=session_id, source_file=f)
 
     if dry_run:
         copied = planned
