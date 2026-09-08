@@ -62,7 +62,7 @@ Populate these environment variables before running Globus transfers:
 Populate these environment variables before running the helper:
 - `GLOBUS_SOURCE_ENDPOINT`
 - `GLOBUS_DEST_ENDPOINT`
-- `GLOBUS_SOURCE_PATH` (defaults to `/` if unset)
+- `GLOBUS_SOURCE_PATH` (defaults to `/Actigraphy Data/` in lab wrappers; `/` in the Python helper if unset)
 - `GLOBUS_DEST_PATH`
 - `GLOBUS_LABEL` (defaults to `NEU to UI sync`)
 - `GLOBUS_SYNC_LEVEL` (defaults to `mtime`)

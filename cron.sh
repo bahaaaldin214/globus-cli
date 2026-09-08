@@ -1,22 +1,16 @@
 #!/bin/bash
-# set -euo pipefail
+# Globus Sunday cron: sync NEU -> dump, then reshape -> act-int-ready.
+# Prefer: `bahaa pipeline globus-both` (see tools/cron/jobs.txt). This script
+# remains for manual/legacy use; pip/git failures must not block transfer.
 
-# Source the Conda activate script
 source /opt/anaconda3-2024.10-1/etc/profile.d/conda.sh
-
-# load the globus env
 conda activate globus
 
-# Move to project home dir
 cd "$(dirname "$0")"
 
-# grab any new code changes, otherwise skip
-git pull --ff-only origin main
+# Best-effort update only — network often flaky on vosslink.
+git pull --ff-only origin main || echo "WARNING: git pull failed; continuing with local tree" >&2
+pip install -e . || echo "WARNING: pip install failed; continuing with installed package" >&2
 
-# install any new dependencies and make sure the package is available in env
-pip install -e .
-
-# run sync (NEU -> LSS dump) then BIDS transfer (dump -> inputs/act-int-ready)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 bash "${SCRIPT_DIR}/globus_helper/sh/full_pipeline.sh"
-

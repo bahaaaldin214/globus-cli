@@ -380,9 +380,13 @@ def sync_command(
     try:
         sync.run()
     except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
         logger.exception("Globus transfer failed")
+        if detail:
+            sys.stderr.write(detail + "\n")
         raise click.ClickException(
             f"Globus transfer failed with exit code {exc.returncode}."
+            + (f" Detail: {detail.splitlines()[-1]}" if detail else "")
         ) from exc
 
     logger.info("Globus transfer completed successfully")
